@@ -1,0 +1,17 @@
+[package]
+name = "book-recommender"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ndarray = "0.16.1"
+ort = {version = "2.0.0-rc.10", features = ["fetch-models"]}
+oxrdfio = "0.2.1"
+tokenizers = { version = "0.22.2", default-features = false, features = [ "onig" ] }
+tracing-subscriber = {version = "0.3.22", default-features = false, features = ["env-filter", "fmt"]}
+
+
+# ort = { path = "../../", features = [ "fetch-models" ] }
+# ndarray = "0.17"
+# tokenizers = { version = "0.19", default-features = false, features = [ "onig" ] }
+# tracing-subscriber = { version = "0.3", default-features = false, features = [ "env-filter", "fmt" ] }
