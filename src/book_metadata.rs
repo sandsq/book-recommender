@@ -1,9 +1,9 @@
 use oxrdfio::{RdfFormat, RdfParser};
 use serde::{Deserialize, Serialize};
 use serde_yaml; // Add this line for YAML serialization
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct BookMetadata {
@@ -76,6 +76,9 @@ pub fn process_rdf(file_path: &str) -> Result<BookMetadata, Box<dyn std::error::
                     .to_string()
                     .replace("\"", "")
                     .replace("\\", r#"""#)
+                    .replace("(This is an automatically generated summary.)", "")
+                    .trim()
+                    .to_string();
                 // .replace("\\\"", "\"");
             }
             // Optionally include a title extraction if needed
@@ -86,8 +89,8 @@ pub fn process_rdf(file_path: &str) -> Result<BookMetadata, Box<dyn std::error::
         // println!("{}", quad.predicate.to_string());
         // println!("{}", quad.object.to_string());
     }
-    println!("{:?}", book_metadata);
-    println!("{}", book_metadata.summary);
+    // println!("{:?}", book_metadata);
+    // println!("{}", book_metadata.summary);
 
     // Write book_metadata to file
     write_metadata_to_file(&book_metadata)?;
@@ -95,7 +98,7 @@ pub fn process_rdf(file_path: &str) -> Result<BookMetadata, Box<dyn std::error::
 }
 
 fn write_metadata_to_file(metadata: &BookMetadata) -> Result<(), Box<dyn std::error::Error>> {
-    let file_path = format!("book_metadata_{}.yaml", metadata.id);
+    let file_path = format!("data/metadata/book_metadata_{}.yaml", metadata.id);
     {
         let file = OpenOptions::new()
             .write(true)
@@ -109,24 +112,90 @@ fn write_metadata_to_file(metadata: &BookMetadata) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+/// Process all RDF files in the epub directory
+/// Returns a vector of successfully processed BookMetadata and a count of errors
+///
+/// # Arguments
+/// * `epub_dir` - The path to the epub directory
+/// * `id_range` - Optional range of book IDs to process. If None, processes all books.
+///                Format: (start_id, end_id) inclusive
+pub fn process_all_rdf_files(
+    epub_dir: &str,
+    id_range: Option<(u32, u32)>,
+) -> Result<Vec<BookMetadata>, Box<dyn std::error::Error>> {
+    let mut all_metadata = Vec::new();
+
+    let entries = fs::read_dir(epub_dir)?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
+                // let book_id = dir_name.parse::<u32>()?;
+                let book_id = match dir_name.parse::<u32>() {
+                    Ok(id) => id,
+                    Err(e) => panic!("{} has errro {}", dir_name, e),
+                };
+
+                if let Some((start, end)) = id_range {
+                    if book_id < start || book_id > end {
+                        continue;
+                    }
+                }
+            }
+
+            let rdf_files = fs::read_dir(&path)?;
+            for rdf_file in rdf_files {
+                let rdf_file = rdf_file?;
+                let rdf_path = rdf_file.path();
+
+                if rdf_path.extension().and_then(|s| s.to_str()) == Some("rdf") {
+                    let path_str = rdf_path.to_str().unwrap_or("");
+
+
+                    let metadata = process_rdf(path_str)?;
+                    all_metadata.push(metadata);
+                }
+            }
+        }
+    }
+
+    println!("\nProcessed {} books successfully", all_metadata.len());
+
+    Ok(all_metadata)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_process_rdf_pg1() {
-        let test_path = "data/cache/epub/1/pg1.rdf";
-        match process_rdf(test_path) {
-            Ok(_) => assert!(true), // Test passes if no error
-            Err(e) => panic!("Test failed with error: {}", e),
-        }
-    }
+    // #[test]
+    // fn test_process_rdf_pg1() {
+    //     let test_path = "data/cache/epub/1/pg1.rdf";
+    //     match process_rdf(test_path) {
+    //         Ok(_) => assert!(true), // Test passes if no error
+    //         Err(e) => panic!("Test failed with error: {}", e),
+    //     }
+    // }
+
+    // #[test]
+    // fn test_process_rdf_pg11() {
+    //     let test_path = "data/cache/epub/11/pg11.rdf";
+    //     match process_rdf(test_path) {
+    //         Ok(_) => assert!(true), // Test passes if no error
+    //         Err(e) => panic!("Test failed with error: {}", e),
+    //     }
+    // }
 
     #[test]
-    fn test_process_rdf_pg422() {
-        let test_path = "data/cache/epub/422/pg422.rdf";
-        match process_rdf(test_path) {
-            Ok(_) => assert!(true), // Test passes if no error
+    fn test_process_all_rdf_files_with_range() {
+        let epub_dir = "data/cache/epub";
+        match process_all_rdf_files(epub_dir, Some((1, 10))) {
+            Ok(_) => {
+                println!("success")
+            }
             Err(e) => panic!("Test failed with error: {}", e),
         }
     }
