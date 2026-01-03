@@ -1,15 +1,85 @@
-use std::task::Context;
-
 use pgvector::Vector;
 use sqlx::Row;
 use sqlx::postgres::PgPool;
 
-pub async fn set_up_table(
+use crate::book_metadata::RdfFileIterator;
+
+// https://www.postgresql.org/docs/current/predefined-roles.html
+// https://www.postgresql.org/docs/current/sql-createrole.html
+// create role role_name login;
+//
+// https://www.postgresql.org/docs/current/sql-grant.html
+// grant all on table_name to role_name;
+// GRANT ALL ON SCHEMA public TO role_name;
+// if using serial:
+// grant all on sequence table_name_id_seq to role_name;
+// grant all on all sequences in schema public to role_name;
+
+pub async fn set_up_metadata_table(
     pool: &PgPool,
     table_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("set up user");
+    let table_creation_string = format!(
+        "
+        CREATE TABLE IF NOT EXISTS {} (
+        id bigint PRIMARY KEY,
+        title TEXT NOT NULL,
+        author TEXT NOT NULL,
+        birthyear INTEGER,
+        deathyear INTEGER,
+        summary TEXT
+        )",
+        table_name
+    );
 
+    sqlx::query(table_creation_string.as_str())
+        .execute(pool)
+        .await?;
+
+    // let all_metadata = process_all_rdf_files("data/cache/epub", Some((1, 10)), Some(false))?;
+    let metadata_iterator = RdfFileIterator::new("data/cache/epub", Some((5, 20)), Some(false))?;
+
+    for metadata in metadata_iterator {
+        let metadata = metadata?;
+        let insert_string = format!(
+            "
+            INSERT INTO {} (id, title, author, birthyear, deathyear, summary) VALUES ($1, $2, $3, $4, $5, $6)
+            ",
+            table_name
+        );
+        let birthyear = match metadata.birthyear.parse::<i32>() {
+            Ok(year) => Some(year),
+            Err(_) => None,
+        };
+        let deathyear = match metadata.deathyear.parse::<i32>() {
+            Ok(year) => Some(year),
+            Err(_) => None,
+        };
+        match sqlx::query(insert_string.as_str())
+            .bind(metadata.id)
+            .bind(metadata.title)
+            .bind(metadata.author)
+            .bind(birthyear)
+            .bind(deathyear)
+            .bind(metadata.summary)
+            .execute(pool)
+            .await
+        {
+            Ok(_) => (),
+            Err(e) => {
+                println!("Error inserting metadata for book {}: {}", metadata.id, e);
+                continue;
+            }
+        };
+    }
+
+    Ok(())
+}
+
+pub async fn set_up_vector_table(
+    pool: &PgPool,
+    table_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
         .execute(pool)
         .await?;
@@ -54,71 +124,27 @@ pub async fn set_up_table(
     let embedding2: Vector = row.try_get("embedding")?;
     println!("{:?}", embedding2);
 
-    // let create_user = sqlx::query(
-    //     r#"
-    //     create user $1;
-    //     "#,
-    // )
-    // .bind(username)
-    // .execute(pool)
-    // .await?;
-
-    // println!("create user result: {:?}", create_user);
-
-    // let grant_user = client.execute(
-    //     "
-    //         grant all on $2 to $1;
-    //     ",
-    //     &[&username, &table],
-    // )?;
-    // println!("grant user result: {:?}", grant_user);
-
-    // let mut client_new = Client::connect(
-    //     format!("host=localhost, user={}, dbname=book_recommender", username).as_str(),
-    //     NoTls,
-    // )?;
-
-    // for row in client_new.query("SELECT * FROM $ limit 1", &[])? {
-    //     println!("row is {:?}", row);
-    // }
-
-    Ok(())
-}
-
-pub async fn run_postgres_example(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    // let rec = sqlx::query!(
-    //     r#"
-    // INSERT INTO test_table ( id, title )
-    // VALUES ( 2, $1 )
-    // RETURNING id
-    //         "#,
-    //     "sqlx test"
-    // )
-    // .fetch_one(pool)
-    // .await?;
-
-    // // client.batch_execute(
-    // //     "
-    // //     CREATE TABLE person (
-    // //         id      SERIAL PRIMARY KEY,
-    // //         name    TEXT NOT NULL,
-    // //         data    BYTEA
-    // //     )
-    // // ",
-    // // )?;
-
-    // let rows = sqlx::query!("SELECT * from test_table limit 1")
-    //     .fetch_all(pool)
-    //     .await?;
-
-    // for row in rows {
-    //     println!("- {}: {}", row.id, &row.title,);
-    // }
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
+    use sqlx::postgres::PgPoolOptions;
+
     use super::*;
+
+    #[tokio::test]
+    async fn test_set_up_metadata_table() -> Result<(), Box<dyn std::error::Error>> {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&env::var("DATABASE_URL")?)
+            .await?;
+        let table_name = "book_metadata";
+        match set_up_metadata_table(&pool, table_name).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
