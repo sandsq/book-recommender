@@ -1,9 +1,10 @@
 use ndarray::{ArrayBase, Axis, Dim, Ix2, ViewRepr};
 use ort::{
     Error,
-    session::{Session, builder::GraphOptimizationLevel},
+    session::{self, Session, builder::GraphOptimizationLevel},
     value::TensorRef,
 };
+use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -132,11 +133,7 @@ fn prepare_tokenized_inputs(
 //     Ok(embeddings)
 // }
 
-pub fn query_model(
-    model_path: &str,
-    tokenizer_path: &str,
-    inputs: Vec<&str>,
-) -> ort::Result<(), Box<dyn std::error::Error>> {
+pub fn ready_model(model_path: &str) -> Result<Session, Box<dyn std::error::Error>> {
     // Initialize tracing to receive debug messages from `ort`
     tracing_subscriber::registry()
         .with(
@@ -146,6 +143,19 @@ pub fn query_model(
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    let session = Session::builder()?
+        .with_optimization_level(GraphOptimizationLevel::Level3)?
+        .with_intra_threads(4)?
+        .commit_from_file(model_path)?;
+
+    Ok(session)
+}
+
+pub fn query_model(
+    session: &mut Session,
+    tokenizer_path: &str,
+    inputs: Vec<&str>,
+) -> ort::Result<Vec<(String, Vec<f32>)>, Box<dyn std::error::Error>> {
     // Load the tokenizer and encode the text.
 
     let tokenizer =
@@ -164,14 +174,6 @@ pub fn query_model(
     let a_ids = TensorRef::from_array_view(([inputs.len(), padded_token_length], &*ids))?;
     let a_mask = TensorRef::from_array_view(([inputs.len(), padded_token_length], &*mask))?;
 
-    let mut session = Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(4)?
-        // .commit_from_url(
-        //     "https://cdn.pyke.io/0/pyke:ort-rs/example-models@0.0.0/all-MiniLM-L6-v2.onnx",
-        // )?;
-        .commit_from_file(model_path)?;
-    // Run the model.
     let outputs = session.run(ort::inputs![a_ids, a_mask])?;
 
     // Extract our embeddings tensor and convert it to a strongly-typed 2-dimensional array.
@@ -179,24 +181,31 @@ pub fn query_model(
         .try_extract_array::<f32>()?
         .into_dimensionality::<Ix2>()?;
 
-    println!("{:?}", embeddings);
+    // println!("{:?}", embeddings);
 
     let test = embeddings.index_axis(Axis(0), 1).to_slice();
     println!("{:?}", test);
 
-    println!("Similarity for '{}'", inputs[0]);
-    let query = embeddings.index_axis(Axis(0), 0);
+    // println!("Similarity for '{}'", inputs[0]);
+    // let query = embeddings.index_axis(Axis(0), 0);
 
-    for (embeddings, sentence) in embeddings.axis_iter(Axis(0)).zip(inputs.iter()).skip(1) {
-        // Calculate cosine similarity against the 'query' sentence.
-        let dot_product: f32 = query
-            .iter()
-            .zip(embeddings.iter())
-            .map(|(a, b)| a * b)
-            .sum();
-        println!("\t'{}': {:.1}%", sentence, dot_product * 100.);
+    // for (embeddings, sentence) in embeddings.axis_iter(Axis(0)).zip(inputs.iter()).skip(1) {
+    //     // Calculate cosine similarity against the 'query' sentence.
+    //     let dot_product: f32 = query
+    //         .iter()
+    //         .zip(embeddings.iter())
+    //         .map(|(a, b)| a * b)
+    //         .sum();
+    //     println!("\t'{}': {:.1}%", sentence, dot_product * 100.);
+    // }
+    let mut all_embeddings: Vec<(String, Vec<f32>)> = vec![];
+    for (embedding, sentence) in embeddings.axis_iter(Axis(0)).zip(inputs.iter()) {
+        if let Some(embedding_vec) = embedding.to_slice() {
+            all_embeddings.push((sentence.to_string(), embedding_vec.to_vec()));
+        }
     }
-    Ok(())
+
+    Ok(all_embeddings)
 }
 
 #[cfg(test)]
@@ -252,5 +261,47 @@ mod tests {
                 panic!("prepare_tokenized_inputs failed with error: {}", e);
             }
         }
+    }
+
+    #[test]
+    fn test_query_model() -> Result<(), Box<dyn std::error::Error>> {
+        // Paths to test resources
+        let model_path = "/home/sand/coding/qwen3-test/model.onnx";
+        let tokenizer_path = "/home/sand/coding/qwen3-test/tokenizer.json";
+
+        // Check if test resources exist before running the test
+        if !std::path::Path::new(model_path).exists() {
+            println!("Model file not found at {}. Skipping test.", model_path);
+        }
+
+        if !std::path::Path::new(tokenizer_path).exists() {
+            println!(
+                "Tokenizer file not found at {}. Skipping test.",
+                tokenizer_path
+            );
+        }
+
+        let inputs = vec![
+            "Mr. and Mrs. Bennet live with their five daughters. Jane, the eldest daughter, falls in love with Charles Bingley, a rich bachelor who moves into a house nearby with his two sisters and friend, Fitzwilliam Darcy. Darcy is attracted to the second daughter, Elizabeth, but she finds him arrogant and self-centered. When Darcy proposes to Elizabeth, she refuses. But perhaps there is more to Darcy than meets the eye.",
+            "A woman and a man fall in love. The man's friend pursues the woman's younger sister, who does not like him at first.",
+            "A woman meets a man who she does not like at first, even though he likes her.",
+            "A dummy piece of text",
+            " Beautiful, clever, rich—and single—Emma Woodhouse is perfectly content with her life and sees no need for either love or marriage. Nothing, however, delights her more than interfering in the romantic lives of others. But when she ignores the warnings of her good friend Mr. Knightley and attempts to arrange a suitable match for her protegee Harriet Smith, her carefully laid plans soon unravel and have consequences that she never expected.",
+            "A man is exiled from his home, only to come back years later to take revenge.",
+        ];
+
+        let mut session = ready_model(model_path)?;
+
+        // Call the function - it should not panic and should return Ok
+        let result = query_model(&mut session, tokenizer_path, inputs.clone())?;
+        let result2 = query_model(&mut session, tokenizer_path, inputs)?;
+
+        println!(
+            "embedding 2 {:?}, is equal {}",
+            result[1],
+            result[1] == result2[1]
+        );
+
+        Ok(())
     }
 }
