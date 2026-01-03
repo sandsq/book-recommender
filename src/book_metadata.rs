@@ -205,7 +205,7 @@ impl Iterator for RdfFileIterator {
                                     "Failed to process RDF file: {} because of {}",
                                     path_str, e
                                 );
-                                return Some(Err(e));
+                                continue;
                             }
                         };
 

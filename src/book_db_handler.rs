@@ -37,7 +37,7 @@ pub async fn set_up_metadata_table(
         .await?;
 
     // let all_metadata = process_all_rdf_files("data/cache/epub", Some((1, 10)), Some(false))?;
-    let metadata_iterator = RdfFileIterator::new("data/cache/epub", Some((5, 20)), Some(false))?;
+    let metadata_iterator = RdfFileIterator::new("data/cache/epub", None, Some(false))?;
 
     for metadata in metadata_iterator {
         let metadata = metadata?;
@@ -97,32 +97,6 @@ pub async fn set_up_vector_table(
         .bind(table_name)
         .execute(pool)
         .await?;
-
-    let embedding = Vector::from(vec![1.0, 2.0, 3.0]);
-
-    let insert_string = format!(
-        "
-        INSERT INTO {} (embedding) VALUES ($1)
-        ",
-        table_name
-    );
-    sqlx::query(insert_string.as_str())
-        .bind(embedding)
-        .execute(pool)
-        .await?;
-
-    let select_string = format!(
-        "
-        SELECT embedding FROM {} LIMIT 1
-        ",
-        table_name
-    );
-    let row = sqlx::query(select_string.as_str())
-        .bind(table_name)
-        .fetch_one(pool)
-        .await?;
-    let embedding2: Vector = row.try_get("embedding")?;
-    println!("{:?}", embedding2);
 
     Ok(())
 }
