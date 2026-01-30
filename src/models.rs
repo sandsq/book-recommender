@@ -151,17 +151,16 @@ pub fn ready_model(model_path: &str) -> Result<Session, Box<dyn std::error::Erro
     Ok(session)
 }
 
+pub fn ready_tokenizer(tokenizer_path: &str) -> Tokenizer {
+    Tokenizer::from_file(tokenizer_path).unwrap()
+}
+
 pub fn query_model(
     session: &mut Session,
-    tokenizer_path: &str,
+    tokenizer: &Tokenizer,
     inputs: Vec<&str>,
 ) -> ort::Result<Vec<(String, Vec<f32>)>, Box<dyn std::error::Error>> {
     // Load the tokenizer and encode the text.
-
-    let tokenizer =
-        // Tokenizer::from_file("/home/sand/coding/Qwen3-Embedding-0.6B-ONNX/tokenizer-minilm.json")
-            // .unwrap();
-    Tokenizer::from_file(tokenizer_path).unwrap();
 
     let (ids, mask, padded_token_length) = prepare_tokenized_inputs(&tokenizer, &inputs)?;
     // println!(
@@ -183,8 +182,8 @@ pub fn query_model(
 
     // println!("{:?}", embeddings);
 
-    let test = embeddings.index_axis(Axis(0), 1).to_slice();
-    println!("{:?}", test);
+    // let test = embeddings.index_axis(Axis(0), 1).to_slice();
+    // println!("{:?}", test);
 
     // println!("Similarity for '{}'", inputs[0]);
     // let query = embeddings.index_axis(Axis(0), 0);
@@ -264,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_query_model() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_query_model() {
         // Paths to test resources
         let model_path = "/home/sand/coding/qwen3-test/model.onnx";
         let tokenizer_path = "/home/sand/coding/qwen3-test/tokenizer.json";
@@ -283,6 +282,7 @@ mod tests {
 
         let inputs = vec![
             "Mr. and Mrs. Bennet live with their five daughters. Jane, the eldest daughter, falls in love with Charles Bingley, a rich bachelor who moves into a house nearby with his two sisters and friend, Fitzwilliam Darcy. Darcy is attracted to the second daughter, Elizabeth, but she finds him arrogant and self-centered. When Darcy proposes to Elizabeth, she refuses. But perhaps there is more to Darcy than meets the eye.",
+            "\"The Declaration of Independence of the United States of America\" by Thomas Jefferson is a historic and foundational document penned in the late 18th century during the American Revolutionary period. This work primarily serves as a formal statement declaring the thirteen American colonies' separation from British rule, asserting their right to self-governance and independence. It encapsulates the philosophical underpinnings of democracy, highlighting fundamental human rights and the social contract between the government and the governed.  The text begins with a powerful introduction that outlines the principles of equality and the unalienable rights of individuals to life, liberty, and the pursuit of happiness. It details the various grievances against King George III, illustrating how his actions have eroded the colonists' rights and justified their decision to seek independence. By listing these grievances, the document seeks to assert the colonies' legitimate claim to self-determination. The Declaration culminates in a solemn proclamation of independence, stating that the colonies are entitled to be free and independent states, free from British authority and capable of forming their own alliances, levying war, and engaging in commerce. The Declaration's closing emphasizes the signers' mutual pledge to support this cause, reinforcing the commitment of the colonists to their newly proclaimed liberty.",
             "A woman and a man fall in love. The man's friend pursues the woman's younger sister, who does not like him at first.",
             "A woman meets a man who she does not like at first, even though he likes her.",
             "A dummy piece of text",
@@ -290,18 +290,17 @@ mod tests {
             "A man is exiled from his home, only to come back years later to take revenge.",
         ];
 
-        let mut session = ready_model(model_path)?;
+        let mut session = ready_model(model_path).unwrap();
+        let tokenizer = ready_tokenizer(tokenizer_path);
 
         // Call the function - it should not panic and should return Ok
-        let result = query_model(&mut session, tokenizer_path, inputs.clone())?;
-        let result2 = query_model(&mut session, tokenizer_path, inputs)?;
+        let result = query_model(&mut session, &tokenizer, inputs.clone()).unwrap();
+        let result2 = query_model(&mut session, &tokenizer, inputs).unwrap();
 
         println!(
             "embedding 2 {:?}, is equal {}",
             result[1],
             result[1] == result2[1]
         );
-
-        Ok(())
     }
 }

@@ -28,6 +28,7 @@ async fn main() -> ort::Result<(), Box<dyn std::error::Error>> {
         .await?;
     // "postgres://postgres:@localhost/book_recommender")
 
-    book_db_handler::set_up_metadata_table(&pool, "book_metadata").await?;
+    // book_db_handler::set_up_metadata_table(&pool, "book_metadata").await?;
+    book_db_handler::set_up_vector_table(&pool, "book_summary_vectors").await?;
     Ok(())
 }
