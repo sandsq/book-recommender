@@ -1,10 +1,21 @@
 use pgvector::Vector;
+use rayon::prelude::*;
 use sqlx::Row;
 use sqlx::postgres::PgPool;
+use std::cell::RefCell;
+use std::sync::mpsc;
 
 use crate::book_metadata::RdfFileIterator;
 use crate::models::{query_model, ready_model, ready_tokenizer};
 
+// psql -U postgres
+// sudo -i -u postgres
+// initdb -D /var/lib/postgres/data
+// sudo systemctl start postgresql.service
+//
+// \l to list databases
+// \dt to list tables
+// \c db to connect to db
 // https://www.postgresql.org/docs/current/predefined-roles.html
 // https://www.postgresql.org/docs/current/sql-createrole.html
 // create role role_name login;
@@ -84,6 +95,7 @@ pub async fn set_up_vector_table(
     sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
         .execute(pool)
         .await?;
+    println!("added pgvector extension");
 
     let table_creation_string = format!(
         "
@@ -114,7 +126,6 @@ pub async fn set_up_vector_table(
             .bind(id)
             .fetch_all(pool)
             .await?;
-        // println!("{:?}", result.get(0).unwrap().get(0));
         let val: bool = result.get(0).unwrap().get(0);
         if val {
             println!("already did id {}", id);
@@ -148,6 +159,115 @@ pub async fn set_up_vector_table(
                 continue;
             }
         };
+    }
+
+    Ok(())
+}
+
+pub async fn set_up_vector_table_par(
+    pool: &PgPool,
+    table_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+        .execute(pool)
+        .await?;
+    println!("added pgvector extension");
+
+    let table_creation_string = format!(
+        "
+        CREATE TABLE IF NOT EXISTS {} (
+        id bigserial PRIMARY KEY,
+        embedding vector(1024)
+    )",
+        table_name
+    );
+
+    sqlx::query(table_creation_string.as_str())
+        .bind(table_name)
+        .execute(pool)
+        .await?;
+
+    let model_path = "/home/sand/coding/qwen3-test/model.onnx";
+    let tokenizer_path = "/home/sand/coding/qwen3-test/tokenizer.json";
+    let tokenizer = ready_tokenizer(tokenizer_path);
+
+    let metadata_iterator = RdfFileIterator::new("data/cache/epub", None, Some(false))?;
+
+    // Collect metadata that needs processing
+    let mut metadata_to_process = Vec::new();
+    for metadata in metadata_iterator {
+        let metadata = metadata?;
+        let id = metadata.id;
+
+        let result = sqlx::query("select exists(select 1 from book_summary_vectors where id = $1)")
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
+        let val: bool = result.get(0).unwrap().get(0);
+
+        if val {
+            println!("already did id {}", id);
+            continue;
+        }
+
+        metadata_to_process.push(metadata);
+    }
+
+    // Process in batches: compute vectors in parallel, then insert, repeat
+    let batch_size = 100;
+    thread_local! {
+        static MODEL_SESSION: RefCell<Option<ort::session::Session>> = RefCell::new(None);
+    }
+
+    for chunk in metadata_to_process.chunks(batch_size) {
+        // Parallel processing of model inference for this batch
+        let results: Vec<_> = chunk
+            .par_iter()
+            .map(|metadata| {
+                MODEL_SESSION.with(|session_cell| {
+                    let mut session_opt = session_cell.borrow_mut();
+                    if session_opt.is_none() {
+                        *session_opt = ready_model(model_path).ok();
+                    }
+
+                    let session = session_opt.as_mut()?;
+                    let summary = vec![metadata.summary.as_str()];
+                    let summary_vector = query_model(session, &tokenizer, summary)
+                        .ok()?
+                        .first()
+                        .map(|(_, vec)| Vector::from(vec.clone()))?;
+
+                    Some((metadata.id, summary_vector))
+                })
+            })
+            .collect();
+
+        // Insert this batch into the database
+        for result in results {
+            if let Some((id, summary_vector)) = result {
+                let insert_string = format!(
+                    "
+                    INSERT INTO {} (id, embedding) VALUES ($1, $2)
+                    ",
+                    table_name
+                );
+
+                match sqlx::query(insert_string.as_str())
+                    .bind(id)
+                    .bind(summary_vector)
+                    .execute(pool)
+                    .await
+                {
+                    Ok(_) => (),
+                    Err(e) => {
+                        println!("Error inserting metadata for book {}: {}", id, e);
+                        continue;
+                    }
+                };
+            }
+        }
+
+        println!("Completed batch of {} items", chunk.len());
     }
 
     Ok(())
@@ -193,6 +313,7 @@ pub async fn query_sample_text(
 
 #[cfg(test)]
 mod tests {
+    use dotenv::dotenv;
     use std::env;
 
     use sqlx::postgres::PgPoolOptions;
@@ -201,9 +322,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_up_metadata_table() -> Result<(), Box<dyn std::error::Error>> {
+        dotenv().ok();
+        let DATABASE_URL = env::var("DATABASE_URL")?;
         let pool = PgPoolOptions::new()
             .max_connections(5)
-            .connect(&env::var("DATABASE_URL")?)
+            .connect(&DATABASE_URL)
             .await?;
         let table_name = "book_metadata";
         match set_up_metadata_table(&pool, table_name).await {

@@ -135,13 +135,7 @@ fn prepare_tokenized_inputs(
 
 pub fn ready_model(model_path: &str) -> Result<Session, Box<dyn std::error::Error>> {
     // Initialize tracing to receive debug messages from `ort`
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,ort=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    
 
     let session = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?

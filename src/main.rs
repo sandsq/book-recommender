@@ -2,9 +2,12 @@ mod book_db_handler;
 mod book_metadata;
 mod models;
 
+use dotenv::dotenv;
 use std::env;
 
 use sqlx::postgres::PgPoolOptions;
+
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ort::Result<(), Box<dyn std::error::Error>> {
@@ -21,10 +24,24 @@ async fn main() -> ort::Result<(), Box<dyn std::error::Error>> {
     //     "A man is exiled from his home, only to come back years later to take revenge.",
     // ];
     // models::query_model(model_path, tokenizer_path, inputs)?;
+    // rayon::ThreadPoolBuilder::new()
+    //     .num_threads(4)
+    //     .build_global()
+    //     .unwrap();
 
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,ort=debug".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    dotenv::dotenv().ok();
+    let DATABASE_URL = env::var("DATABASE_URL")?;
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect(&env::var("DATABASE_URL")?)
+        .connect(&DATABASE_URL)
         .await?;
     // "postgres://postgres:@localhost/book_recommender")
 
